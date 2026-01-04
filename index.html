@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Generador de Queries para Lens.org</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Librería para leer Excel -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+    <!-- Iconos -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <style>
+        body { font-family: 'Inter', sans-serif; background-color: #f3f4f6; }
+        .drop-zone { border: 2px dashed #cbd5e1; transition: all 0.3s ease; }
+        .drop-zone:hover, .drop-zone.dragover { border-color: #3b82f6; background-color: #eff6ff; }
+    </style>
+</head>
+<body class="p-6">
+
+    <div class="max-w-4xl mx-auto bg-white rounded-xl shadow-lg overflow-hidden">
+        <!-- Header -->
+        <div class="bg-blue-900 p-6 text-white">
+            <h1 class="text-2xl font-bold flex items-center gap-2">
+                <i data-lucide="search" class="w-8 h-8"></i>
+                Generador de Query para Lens.org
+            </h1>
+            <p class="text-blue-200 mt-2 text-sm">Convierte listas de Excel a queries booleanas complejas con detección de ORCID y variaciones de nombres latinos.</p>
+        </div>
+
+        <div class="p-6 space-y-6">
+            
+            <!-- Input Section -->
+            <div class="grid md:grid-cols-2 gap-6">
+                <!-- Option 1: File Upload -->
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-2">Opción 1: Subir Excel (.xlsx, .csv)</label>
+                    <div id="dropZone" class="drop-zone rounded-lg p-8 text-center cursor-pointer relative h-40 flex flex-col items-center justify-center">
+                        <input type="file" id="fileInput" accept=".xlsx, .xls, .csv" class="absolute inset-0 w-full h-full opacity-0 cursor-pointer">
+                        <i data-lucide="upload-cloud" class="w-10 h-10 text-gray-400 mb-2"></i>
+                        <span class="text-sm text-gray-500">Arrastra tu archivo aquí o haz clic</span>
+                        <span id="fileName" class="text-xs text-blue-600 font-semibold mt-2 hidden"></span>
+                    </div>
+                </div>
+
+                <!-- Option 2: Paste Text -->
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-2">Opción 2: Pegar Lista (1 por línea)</label>
+                    <textarea id="textInput" class="w-full h-40 p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm" placeholder="Netzahualpilli Delgado Figueroa&#10;0000-0002-9639-5339&#10;Juan Perez..."></textarea>
+                </div>
+            </div>
+
+            <!-- Configuration -->
+            <div class="bg-gray-50 p-4 rounded-lg border border-gray-200">
+                <h3 class="text-sm font-semibold text-gray-800 mb-3 flex items-center gap-2">
+                    <i data-lucide="settings-2" class="w-4 h-4"></i> Configuración de Variaciones
+                </h3>
+                <div class="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
+                    <label class="flex items-center gap-2 cursor-pointer">
+                        <input type="checkbox" id="checkHyphen" checked class="rounded text-blue-600 focus:ring-blue-500">
+                        <span>Generar con guiones (Apellido-Apellido)</span>
+                    </label>
+                    <label class="flex items-center gap-2 cursor-pointer">
+                        <input type="checkbox" id="checkInverted" checked class="rounded text-blue-600 focus:ring-blue-500">
+                        <span>Generar invertido (Apellidos Nombre)</span>
+                    </label>
+                    <label class="flex items-center gap-2 cursor-pointer">
+                        <input type="checkbox" id="checkHeader" class="rounded text-blue-600 focus:ring-blue-500">
+                        <span>Ignorar primera fila (Encabezados)</span>
+                    </label>
+                </div>
+            </div>
+
+            <!-- Actions -->
+            <div class="flex justify-center">
+                <button onclick="processData()" class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-8 rounded-lg shadow transition-colors flex items-center gap-2">
+                    <i data-lucide="zap" class="w-5 h-5"></i>
+                    Generar Query
+                </button>
+            </div>
+
+            <!-- Output Section -->
+            <div id="outputSection" class="hidden">
+                <div class="flex justify-between items-end mb-2">
+                    <label class="text-sm font-medium text-gray-700">Resultado (<span id="countTerms">0</span> términos)</label>
+                    <button onclick="copyToClipboard()" class="text-sm bg-white border border-gray-300 hover:bg-gray-50 text-gray-700 py-1 px-3 rounded flex items-center gap-1 transition-colors">
+                        <i data-lucide="copy" class="w-4 h-4"></i> Copiar
+                    </button>
+                </div>
+                <div class="relative">
+                    <textarea id="outputQuery" readonly class="w-full h-48 p-4 bg-gray-800 text-green-400 font-mono text-xs rounded-lg shadow-inner overflow-y-auto"></textarea>
+                </div>
+                <p class="text-xs text-gray-500 mt-2 text-right">Nota: LENS puede tener límites en la longitud de la query. Si es muy larga, divídela.</p>
+            </div>
+
+        </div>
+    </div>
+
+    <script>
+        lucide.createIcons();
+
+        // Element References
+        const fileInput = document.getElementById('fileInput');
+        const textInput = document.getElementById('textInput');
+        const fileNameDisplay = document.getElementById('fileName');
+        const dropZone = document.getElementById('dropZone');
+        const outputSection = document.getElementById('outputSection');
+        const outputQuery = document.getElementById('outputQuery');
+        const countTermsSpan = document.getElementById('countTerms');
+
+        // Regex for ORCID (Generic format checking)
+        const orcidRegex = /(\d{4}-\d{4}-\d{4}-[\dX]{4})/;
+
+        // Event Listeners for Drag & Drop style
+        fileInput.addEventListener('change', (e) => {
+            if (e.target.files.length > 0) {
+                fileNameDisplay.textContent = e.target.files[0].name;
+                fileNameDisplay.classList.remove('hidden');
+                dropZone.classList.add('bg-blue-50', 'border-blue-400');
+            }
+        });
+
+        async function processData() {
+            let rawData = [];
+
+            // 1. Get data from Text Area
+            if (textInput.value.trim() !== "") {
+                rawData = textInput.value.split('\n');
+            }
+
+            // 2. Get data from Excel if present
+            if (fileInput.files.length > 0) {
+                const file = fileInput.files[0];
+                const excelData = await readExcelFile(file);
+                // Combine lists (Text area gets priority if needed, but here we append)
+                rawData = rawData.concat(excelData);
+            }
+
+            if (rawData.length === 0) {
+                alert("Por favor, sube un archivo Excel o pega una lista de nombres.");
+                return;
+            }
+
+            // Clean empty lines
+            rawData = rawData.map(s => s.trim()).filter(s => s.length > 0);
+
+            // Handle Header Option
+            if (document.getElementById('checkHeader').checked && rawData.length > 0) {
+                rawData.shift();
+            }
+
+            const queryParts = [];
+            const useHyphens = document.getElementById('checkHyphen').checked;
+            const useInverted = document.getElementById('checkInverted').checked;
+
+            rawData.forEach(entry => {
+                // Detect ORCID
+                const orcidMatch = entry.match(orcidRegex);
+                
+                if (orcidMatch) {
+                    // It's an ORCID
+                    queryParts.push(`author.orcid:${orcidMatch[0]}`);
+                } else {
+                    // It's a Name
+                    // Normalize spaces (remove double spaces)
+                    let cleanName = entry.replace(/\s+/g, ' ');
+                    
+                    // 1. Exact Name
+                    queryParts.push(`author.display_name.exact:"${cleanName}"`);
+
+                    const parts = cleanName.split(' ');
+                    
+                    if (parts.length >= 2) {
+                        // 2. Hyphenated Logic (Common in hispanic names in databases)
+                        // Example: "Juan Perez Lopez" -> "Juan Perez-Lopez"
+                        if (useHyphens && parts.length >= 3) {
+                            // Reconstruct with hyphen between last two parts
+                            const last = parts.pop();
+                            const secondLast = parts.pop();
+                            const rest = parts.join(' ');
+                            const hyphenated = `${rest} ${secondLast}-${last}`.trim();
+                            queryParts.push(`author.display_name.exact:"${hyphenated}"`);
+                            
+                            // Restore parts for next logic
+                            parts.push(secondLast);
+                            parts.push(last);
+                        }
+
+                        // 3. Inverted Logic (Lastname Firstname)
+                        // Example: "Netzahualpilli Delgado Figueroa" -> "Delgado Figueroa Netzahualpilli"
+                        if (useInverted) {
+                            // Heuristic: Assume last 2 are surnames if length > 2, else last 1 is surname
+                            let surname = "";
+                            let givenName = "";
+                            
+                            if (parts.length >= 3) {
+                                // Assume 2 surnames
+                                surname = parts.slice(-2).join(' ');
+                                givenName = parts.slice(0, -2).join(' ');
+                            } else {
+                                // Assume 1 surname
+                                surname = parts[parts.length - 1];
+                                givenName = parts.slice(0, -1).join(' ');
+                            }
+                            
+                            const inverted = `${surname} ${givenName}`;
+                            queryParts.push(`author.display_name.exact:"${inverted}"`);
+
+                            // Inverted + Hyphenated
+                            if (useHyphens && parts.length >= 3) {
+                                const surnameHyphen = parts.slice(-2).join('-');
+                                const invertedHyphen = `${surnameHyphen} ${givenName}`;
+                                queryParts.push(`author.display_name.exact:"${invertedHyphen}"`);
+                            }
+                        }
+                    }
+                }
+            });
+
+            // Deduplicate
+            const uniqueQueries = [...new Set(queryParts)];
+
+            // Construct Final String
+            const finalString = uniqueQueries.join(' OR ');
+
+            // Show Output
+            outputQuery.value = finalString;
+            countTermsSpan.textContent = uniqueQueries.length;
+            outputSection.classList.remove('hidden');
+            outputSection.scrollIntoView({ behavior: 'smooth' });
+        }
+
+        // Helper to read Excel
+        function readExcelFile(file) {
+            return new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onload = (e) => {
+                    const data = new Uint8Array(e.target.result);
+                    const workbook = XLSX.read(data, { type: 'array' });
+                    
+                    // Assume first sheet
+                    const firstSheetName = workbook.SheetNames[0];
+                    const worksheet = workbook.Sheets[firstSheetName];
+                    
+                    // Convert to JSON (Array of Arrays) to get raw rows
+                    const jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1 });
+                    
+                    // Flatten to single array (assuming column A)
+                    const flatList = jsonData.map(row => row[0]).filter(cell => cell !== undefined && cell !== null);
+                    // Convert all to string just in case
+                    const stringList = flatList.map(item => String(item));
+                    
+                    resolve(stringList);
+                };
+                reader.onerror = reject;
+                reader.readAsArrayBuffer(file);
+            });
+        }
+
+        function copyToClipboard() {
+            outputQuery.select();
+            document.execCommand('copy');
+            const btn = document.querySelector('button[onclick="copyToClipboard()"]');
+            const originalText = btn.innerHTML;
+            btn.innerHTML = `<i data-lucide="check" class="w-4 h-4"></i> Copiado!`;
+            setTimeout(() => {
+                btn.innerHTML = originalText;
+                lucide.createIcons();
+            }, 2000);
+        }
+    </script>
+</body>
+</html>
